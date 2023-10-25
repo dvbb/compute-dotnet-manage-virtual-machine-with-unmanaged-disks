@@ -90,7 +90,7 @@ namespace Azure.ResourceManager.Samples.Common
             return vnetLro.Value;
         }
 
-        public static async Task<NetworkInterfaceResource> CreateNetworkInterface(ResourceGroupResource resourceGroup, ResourceIdentifier subnetId, ResourceIdentifier publicIpId, string nicName)
+        public static async Task<NetworkInterfaceResource> CreateNetworkInterface(ResourceGroupResource resourceGroup, ResourceIdentifier subnetId, string nicName)
         {
             nicName = string.IsNullOrEmpty(nicName) ? CreateRandomName("nic") : nicName;
 
@@ -108,38 +108,12 @@ namespace Azure.ResourceManager.Samples.Common
                             {
                                 Id = subnetId
                             },
-                            PublicIPAddress = new PublicIPAddressData()
-                            {
-                                Id  = publicIpId
-                            }
                         }
                     }
             };
             var networkInterfaceLro = await resourceGroup.GetNetworkInterfaces().CreateOrUpdateAsync(WaitUntil.Completed, nicName, nicInput);
             Utilities.Log($"Created network interface: {networkInterfaceLro.Value.Data.Name}");
             return networkInterfaceLro.Value;
-        }
-
-        public static async Task<PublicIPAddressResource> CreatePublicIP(ResourceGroupResource resourceGroup, string publicIpName)
-        {
-            publicIpName = string.IsNullOrEmpty(publicIpName) ? CreateRandomName("pip") : publicIpName;
-
-            Utilities.Log("Creating a public IP address...");
-            PublicIPAddressData publicIPInput = new PublicIPAddressData()
-            {
-                Location = resourceGroup.Data.Location,
-                Sku = new PublicIPAddressSku()
-                {
-                    Name = PublicIPAddressSkuName.Standard,
-                    Tier = PublicIPAddressSkuTier.Regional
-                },
-                PublicIPAllocationMethod = NetworkIPAllocationMethod.Static,
-                DnsSettings = new PublicIPAddressDnsSettings { DomainNameLabel = publicIpName },
-            };
-            _ = await resourceGroup.GetPublicIPAddresses().CreateOrUpdateAsync(WaitUntil.Completed, publicIpName, publicIPInput);
-            var publicIPLro = await resourceGroup.GetPublicIPAddresses().GetAsync(publicIpName);
-            Utilities.Log($"Created a public IP address: {publicIPLro.Value.Data.Name}");
-            return publicIPLro.Value;
         }
     }
 }

@@ -40,9 +40,11 @@ namespace ManageVirtualMachineWithUnmanagedDisks
         {
             string rgName = Utilities.CreateRandomName("ComputeSampleRG");
             string vnetName = Utilities.CreateRandomName("vnet");
-            string nicName = Utilities.CreateRandomName("nic");
+            string nicName1 = Utilities.CreateRandomName("nic1-");
+            string nicName2 = Utilities.CreateRandomName("nic2-");
             string windowsVMName = Utilities.CreateRandomName("windowsVM");
             string linuxVMName = Utilities.CreateRandomName("linuxVM");
+            string dataDiskName = Utilities.CreateRandomName("dataDisk");
             try
             {
                 // Get default subscription
@@ -57,36 +59,103 @@ namespace ManageVirtualMachineWithUnmanagedDisks
 
                 //============================================================
 
-                var startTime = DateTimeOffset.Now.UtcDateTime;
+                Utilities.Log("Pre-creating some resources that the VM depends on");
 
-                var windowsVM = azure.VirtualMachines.Define(windowsVMName)
-                        .WithRegion(Region.USEast)
-                        .WithNewResourceGroup(rgName)
-                        .WithNewPrimaryNetwork("10.0.0.0/28")
-                        .WithPrimaryPrivateIPAddressDynamic()
-                        .WithoutPrimaryPublicIPAddress()
-                        .WithPopularWindowsImage(KnownWindowsVirtualMachineImage.WindowsServer2012R2Datacenter)
-                        .WithAdminUsername(UserName)
-                        .WithAdminPassword(Password)
-                        .WithUnmanagedDisks()
-                        .WithSize(VirtualMachineSizeTypes.Parse("Standard_D2a_v4"))
-                        .Create();
-                var endTime = DateTimeOffset.Now.UtcDateTime;
+                // Creating a virtual network
+                var vnet = await Utilities.CreateVirtualNetwork(resourceGroup, vnetName);
 
-                Utilities.Log($"Created VM: took {(endTime - startTime).TotalSeconds} seconds");
+                // Creating network interface
+                var nic1 = await Utilities.CreateNetworkInterface(resourceGroup, vnet.Data.Subnets[0].Id, nicName1);
+                var nic2 = await Utilities.CreateNetworkInterface(resourceGroup, vnet.Data.Subnets[1].Id, nicName2);
 
-                Utilities.PrintVirtualMachine(windowsVM);
+                // Create a Windows VM
+                VirtualMachineData windowsVMInput = new VirtualMachineData(resourceGroup.Data.Location)
+                {
+                    HardwareProfile = new VirtualMachineHardwareProfile()
+                    {
+                        VmSize = VirtualMachineSizeType.StandardDS1V2
+                    },
+                    StorageProfile = new VirtualMachineStorageProfile()
+                    {
+                        ImageReference = new ImageReference()
+                        {
+                            Publisher = "MicrosoftWindowsDesktop",
+                            Offer = "Windows-10",
+                            Sku = "win10-21h2-ent",
+                            Version = "latest",
+                        },
+                        OSDisk = new VirtualMachineOSDisk(DiskCreateOptionType.FromImage)
+                        {
+                            OSType = SupportedOperatingSystemType.Windows,
+                            Name = "windowsOSDisk",
+                            Caching = CachingType.ReadOnly,
+                            ManagedDisk = new VirtualMachineManagedDisk()
+                            {
+                                StorageAccountType = StorageAccountType.StandardLrs,
+                            },
+                        },
+                    },
+                    OSProfile = new VirtualMachineOSProfile()
+                    {
+                        AdminUsername = Utilities.CreateUsername(),
+                        AdminPassword = Utilities.CreatePassword(),
+                        ComputerName = windowsVMName,
+                    },
+                    NetworkProfile = new VirtualMachineNetworkProfile()
+                    {
+                        NetworkInterfaces =
+                        {
+                            new VirtualMachineNetworkInterfaceReference()
+                            {
+                                Id = nic1.Id,
+                                Primary = true
+                            }
+                        }
+                    },
+                };
+                var windowsVMLro = await resourceGroup.GetVirtualMachines().CreateOrUpdateAsync(WaitUntil.Completed, windowsVMName, windowsVMInput);
+                VirtualMachineResource windowsVM = windowsVMLro.Value;
+                Utilities.Log("Created windows vm: " + windowsVM.Data.Name);
+                Utilities.Log("OSDisk name: " + windowsVM.Data.StorageProfile.OSDisk.Name);
+                Utilities.Log("Data disk count: " + windowsVM.Data.StorageProfile.DataDisks.Count);
+                Utilities.Log("Tag count: " + windowsVM.Data.Tags.Count);
+                Utilities.Log();
 
-                windowsVM.Update()
-                        .WithTag("who-rocks", "open source")
-                        .WithTag("where", "on azure")
-                        .Apply();
+                // Update windows vm tags
+                await windowsVM.AddTagAsync("who-rocks", "open source");
+                await windowsVM.AddTagAsync("where", "on azure");
 
-                Utilities.Log("Tagged VM: " + windowsVM.Id);
+                Utilities.Log("Tagged VM: " + windowsVM.Id.Name);
 
                 //=============================================================
                 // Update - Attach data disks
 
+                VirtualMachineData updateInput = windowsVM.Data;
+                Utilities.Log("Creating three empty managed disk");
+                ManagedDiskData diskInput = new ManagedDiskData(resourceGroup.Data.Location)
+                {
+                    Sku = new DiskSku()
+                    {
+                        Name = DiskStorageAccountType.StandardLrs
+                    },
+                    CreationData = new DiskCreationData(DiskCreateOption.Empty),
+                    DiskSizeGB = 50,
+                };
+                var diskLro1 = await resourceGroup.GetManagedDisks().CreateOrUpdateAsync(WaitUntil.Completed, dataDiskName, diskInput);
+                ManagedDiskResource disk1 = diskLro1.Value;
+                Utilities.Log($"Created managed disk: {disk1.Data.Name}");
+
+
+                updateInput.StorageProfile.DataDisks.Add(new VirtualMachineDataDisk(3, DiskCreateOptionType.Attach)
+                {
+                    Name = dataDiskName,
+                    Caching = CachingType.ReadOnly,
+                    DiskSizeGB = 100,
+                    ManagedDisk = new VirtualMachineManagedDisk()
+                    {
+                        Id = disk1.Id,
+                    }
+                });
                 windowsVM.Update()
                         .WithNewUnmanagedDataDisk(10)
                         .DefineUnmanagedDataDisk(DataDiskName)
@@ -220,7 +289,7 @@ namespace ManageVirtualMachineWithUnmanagedDisks
                         Utilities.Log($"Deleting Resource Group: {_resourceGroupId}");
                         await client.GetResourceGroupResource(_resourceGroupId).DeleteAsync(WaitUntil.Completed);
                         Utilities.Log($"Deleted Resource Group: {_resourceGroupId}");
-                    }   
+                    }
                 }
                 catch (Exception ex)
                 {
